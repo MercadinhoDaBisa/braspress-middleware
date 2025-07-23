@@ -10,6 +10,7 @@ app.use(express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 // Agente HTTPS para lidar com certificados SSL (se necessário, alguns APIs legado exigem)
+// Use com cautela em produção, ideal é que o certificado seja válido.
 const agent = new https.Agent({
     rejectUnauthorized: false
 });
@@ -62,7 +63,7 @@ app.post('/cotacao', async (req, res) => {
         const cnpjCpfDestinatario = yampiData.cart && yampiData.cart.customer ? yampiData.cart.customer.document : null;
 
         let pesoTotal = 0;
-        let cubagemTotal = 0; // Braspress geralmente usa dimensões (altura, largura, comprimento)
+        let cubagemTotal = 0; 
         let qtdeVolumeTotal = 0;
 
         if (yampiData.skus && Array.isArray(yampiData.skus)) {
@@ -74,8 +75,6 @@ app.post('/cotacao', async (req, res) => {
                 const altura = sku.height || 0;
 
                 pesoTotal += pesoItem * quantidadeItem;
-                // Braspress pode pedir as dimensões individuais ou total da embalagem
-                // Por agora, vou usar cubagem para referência, mas a API pode exigir formatação específica
                 cubagemTotal += (comprimento * largura * altura / 1000000) * quantidadeItem;
                 qtdeVolumeTotal += quantidadeItem;
             });
@@ -85,62 +84,67 @@ app.post('/cotacao', async (req, res) => {
 
         // --- Cotação Braspress ---
         try {
-            // A API da Braspress é SOAP e pode ser complexa.
-            // O ideal é consultar a documentação completa da Braspress sobre a estrutura do XML/JSON esperado.
-            // Este é um PLACEHOLDER para o payload, você precisará ajustá-lo.
+            // Este payload é uma suposição e precisará ser ajustado conforme a documentação EXATA da Braspress.
+            // A API da Braspress geralmente usa uma estrutura XML complexa ou JSON com formatos específicos.
             const payloadBraspress = {
-                // EX: "token": "...", "cnpj": "...", "cepOrigem": "...", "cepDestino": "...", "peso": "...", "valorNF": "...", "volumes": [...]
-                // É CRÍTICO consultar a DOCUMENTAÇÃO DA BRASPRESS para montar este payload corretamente.
-                // A maioria das APIs SOAP exige um XML formatado, não um JSON simples.
-                // Se for XML, você precisará de uma biblioteca para construir o XML.
-                // Vamos supor que seja JSON por enquanto para manter a estrutura do axios.
-                "cnpj": BRASPRESS_CNPJ,
+                "cnpjRemetente": BRASPRESS_CNPJ,
                 "usuario": BRASPRESS_USER,
                 "senha": BRASPRESS_PASSWORD,
-                "cepOrigem": cepOrigem,
-                "cepDestino": cepDestino,
+                "origem": cepOrigem,
+                "destino": cepDestino,
                 "peso": pesoTotal,
-                "valorDeclarado": valorDeclarado,
-                "volumes": qtdeVolumeTotal, // Ou um array detalhado de volumes com dimensões
-                "tipoServico": "NORMAL", // Exemplo, pode ser um código Braspress
-                // Outros campos da Braspress que a API deles pode exigir:
-                // "dimensoes": { "altura": ..., "largura": ..., "comprimento": ... },
-                // "tipoCarga": "..."
+                "valorNf": valorDeclarado, // Nome do campo pode variar (ex: valorDeclarado)
+                "tipoServico": "NORMAL", // Exemplo, pode ser um código Braspress (ex: '0' ou '1')
+                "tipoEntrega": "D", // Exemplo, "D" para delivery
+                "volumes": [ // A Braspress pode exigir um array detalhado de volumes
+                    {
+                        "cubagem": cubagemTotal, // Cubagem total dos itens em m³
+                        "peso": pesoTotal,
+                        "quantidade": qtdeVolumeTotal,
+                        // Se a Braspress exigir dimensões por volume, você precisará iterar os SKUs
+                        // "altura": yampiData.skus[0].height,
+                        // "largura": yampiData.skus[0].width,
+                        // "comprimento": yampiData.skus[0].length,
+                    }
+                ]
+                // Outros campos que a documentação da Braspress pode exigir:
+                // "isencaoInscricaoEstadual": false,
+                // "naturezaCarga": "OUTROS",
             };
 
             console.log('Payload Braspress Enviado:', JSON.stringify(payloadBraspress, null, 2));
 
-            // URL da API Braspress (Pode ser necessário especificar um endpoint mais detalhado para cotação)
-            const braspressApiUrl = 'https://api.braspress.com/'; // Verifique a documentação para o endpoint de cotação
+            // <<<<<<< ATENÇÃO AQUI! URL CORRIGIDA PARA O ENDPOINT DA BRASPRESS
+            const braspressApiUrl = `https://api.braspress.com/v1/cotacao/calcular/json`; // Retorno esperado JSON
 
             const responseBraspress = await axios.post(
                 braspressApiUrl,
                 payloadBraspress,
                 {
-                    // Cabeçalhos podem ser necessários para autenticação e tipo de conteúdo
                     headers: {
-                        'Content-Type': 'application/json', // Ou 'application/xml' se for SOAP XML
-                        // Possíveis headers de autenticação como 'Authorization', 'x-api-key', etc.
+                        'Content-Type': 'application/json',
+                        // Adicionar cabeçalhos de autenticação se a API da Braspress exigir (ex: 'Authorization')
                     },
-                    httpsAgent: agent // Se necessário para lidar com certificados
+                    httpsAgent: agent // Se necessário para ignorar certificados SSL inválidos
                 }
             );
 
             // Processar a resposta da Braspress
             if (responseBraspress.data) {
-                // A estrutura da resposta da Braspress é desconhecida neste momento.
-                // Você precisará inspecionar responseBraspress.data e extrair o preço, prazo, etc.
-                // Exemplo hipotético:
-                if (responseBraspress.data.frete && responseBraspress.data.frete.valor) {
+                // A estrutura EXATA da resposta da Braspress precisa ser confirmada pela documentação.
+                // Este é um exemplo hipotético baseado em respostas comuns.
+                if (responseBraspress.data.cotacao && responseBraspress.data.cotacao.valorTotalFrete) {
                     opcoesFrete.push({
-                        "name": "Braspress Padrão",
-                        "service": "Braspress",
-                        "price": responseBraspress.data.frete.valor,
-                        "days": responseBraspress.data.frete.prazo || 0,
-                        "quote_id": "braspress_standard"
+                        "name": "Braspress",
+                        "service": "Braspress_Standard",
+                        "price": responseBraspress.data.cotacao.valorTotalFrete,
+                        "days": responseBraspress.data.cotacao.prazoEntrega || 0,
+                        "quote_id": "braspress_cotacao"
                     });
+                } else if (responseBraspress.data.error) {
+                    console.error('Erro retornado pela API da Braspress:', responseBraspress.data.error);
                 } else {
-                    console.warn('Resposta da Braspress não contém dados de frete esperados:', responseBraspress.data);
+                    console.warn('Resposta da Braspress não contém dados de frete esperados:', JSON.stringify(responseBraspress.data, null, 2));
                 }
             }
 
