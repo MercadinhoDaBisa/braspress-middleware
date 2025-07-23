@@ -54,14 +54,16 @@ app.post('/cotacao', async (req, res) => {
         const yampiData = JSON.parse(requestBodyRaw.toString('utf8'));
         console.log('Payload Yampi Recebido:', JSON.stringify(yampiData, null, 2));
 
-        const cepOrigem = "30720404"; 
+        const cepOrigem = "30720404"; // CEP de origem fixo
         const cepDestino = yampiData.zipcode ? yampiData.zipcode.replace(/\D/g, '') : null;
-        const valorDeclarado = yampiData.amount || 0;
-        const cnpjCpfDestinatario = yampiData.cart && yampiData.cart.customer ? yampiData.cart.customer.document : null;
+        // O campo 'document' da Yampi pode ser CPF ou CNPJ. A Braspress pede 'cnpjDestinatario'.
+        // Se precisar diferenciar ou ter o CNPJ do cliente, será necessário mais lógica aqui.
+        // Por enquanto, vamos usar um CNPJ fictício ou deixar em branco se não for essencial.
+        const cnpjDestinatario = yampiData.cart && yampiData.cart.customer && yampiData.cart.customer.document ? yampiData.cart.customer.document.replace(/\D/g, '') : null;
 
         let pesoTotal = 0;
-        let cubagemTotal = 0; 
-        let qtdeVolumeTotal = 0;
+        let cubagensItems = []; // Array para armazenar os detalhes de cubagem por item/volume
+        let qtdeVolumeTotal = 0; // Quantidade total de volumes simples
 
         if (yampiData.skus && Array.isArray(yampiData.skus)) {
             yampiData.skus.forEach(sku => {
@@ -72,8 +74,15 @@ app.post('/cotacao', async (req, res) => {
                 const altura = sku.height || 0;
 
                 pesoTotal += pesoItem * quantidadeItem;
-                cubagemTotal += (comprimento * largura * altura / 1000000) * quantidadeItem;
-                qtdeVolumeTotal += quantidadeItem;
+                qtdeVolumeTotal += quantidadeItem; // Cada SKU é considerado um volume simples
+                
+                // Adiciona os detalhes de cubagem para cada item/volume conforme o exemplo da Braspress
+                cubagensItems.push({
+                    "altura": altura / 100, // Converter cm para metros
+                    "largura": largura / 100, // Converter cm para metros
+                    "comprimento": comprimento / 100, // Converter cm para metros
+                    "volumes": quantidadeItem // A quantidade de volumes com essas dimensões
+                });
             });
         }
 
@@ -81,29 +90,23 @@ app.post('/cotacao', async (req, res) => {
 
         // --- Cotação Braspress ---
         try {
-            // <<<<<<< ATENÇÃO AQUI! ALTERAÇÕES DE AUTENTICAÇÃO
-            // Concatena usuário e senha no formato 'user:pass'
             const authString = `${BRASPRESS_USER}:${BRASPRESS_PASSWORD}`;
-            // Codifica a string em Base64
             const encodedAuth = Buffer.from(authString).toString('base64');
-            // Remove as credenciais do payload, pois elas vão no cabeçalho
+            
+            // <<<<<<< ATENÇÃO AQUI! AJUSTES FINAIS DE PAYLOAD (Conforme Documentação)
             const payloadBraspress = {
                 "cnpjRemetente": BRASPRESS_CNPJ,
-                "origem": cepOrigem,
-                "destino": cepDestino,
+                "cnpjDestinatario": cnpjDestinatario || "99999999999999", // CNPJ do destinatário, ou um default se não for essencial para o cálculo
+                "modal": "R", // Rodoviário, conforme exemplo
+                "tipoFrete": "1", // Tipo de frete (ex: 1 = CIF, 2 = FOB - confirmar com Braspress)
+                "cepOrigem": cepOrigem,
+                "cepDestino": cepDestino,
+                "vlrMercadoria": yampiData.amount || 0, // Valor da mercadoria (antes era valorNf)
                 "peso": pesoTotal,
-                "valorNf": valorDeclarado,
-                "tipoServico": "NORMAL",
-                "tipoEntrega": "D",
-                "volumes": [
-                    {
-                        "cubagem": cubagemTotal,
-                        "peso": pesoTotal,
-                        "quantidade": qtdeVolumeTotal,
-                    }
-                ]
+                "volumes": qtdeVolumeTotal, // Quantidade total de volumes (número inteiro)
+                "cubagem": cubagensItems // Array de objetos de cubagem
             };
-            // <<<<<<< FIM ALTERAÇÕES DE AUTENTICAÇÃO
+            // <<<<<<< FIM AJUSTES FINAIS DE PAYLOAD
 
             console.log('Payload Braspress Enviado:', JSON.stringify(payloadBraspress, null, 2));
 
@@ -115,7 +118,6 @@ app.post('/cotacao', async (req, res) => {
                 {
                     headers: {
                         'Content-Type': 'application/json',
-                        // <<<<<<< ATENÇÃO AQUI! NOVO CABEÇALHO DE AUTENTICAÇÃO
                         'Authorization': `Basic ${encodedAuth}`
                     },
                     httpsAgent: agent 
@@ -123,6 +125,9 @@ app.post('/cotacao', async (req, res) => {
             );
 
             if (responseBraspress.data) {
+                // A estrutura da resposta pode ser diferente do que o exemplo curl/js mostra no console.log
+                // Verifique o formato real da resposta para extrair os dados.
+                // Exemplo hipotético de estrutura de resposta:
                 if (responseBraspress.data.cotacao && responseBraspress.data.cotacao.valorTotalFrete) {
                     opcoesFrete.push({
                         "name": "Braspress",
@@ -131,8 +136,8 @@ app.post('/cotacao', async (req, res) => {
                         "days": responseBraspress.data.cotacao.prazoEntrega || 0,
                         "quote_id": "braspress_cotacao"
                     });
-                } else if (responseBraspress.data.error) {
-                    console.error('Erro retornado pela API da Braspress:', responseBraspress.data.error);
+                } else if (responseBraspress.data.erro) { // Alguns APIs usam 'erro' ao invés de 'error'
+                    console.error('Erro retornado pela API da Braspress:', responseBraspress.data.erro.mensagem || JSON.stringify(responseBraspress.data.erro, null, 2));
                 } else {
                     console.warn('Resposta da Braspress não contém dados de frete esperados:', JSON.stringify(responseBraspress.data, null, 2));
                 }
