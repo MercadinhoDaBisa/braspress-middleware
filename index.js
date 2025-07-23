@@ -2,15 +2,13 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const https = require('https'); // Necessário para ignorar erros SSL se a API Braspress precisar
+const https = require('https'); 
 
-const app = express(); // Linha temporaria para forcar o Git a reconhecer a mudanca
+const app = express();
 
 app.use(express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// Agente HTTPS para lidar com certificados SSL (se necessário, alguns APIs legado exigem)
-// Use com cautela em produção, ideal é que o certificado seja válido.
 const agent = new https.Agent({
     rejectUnauthorized: false
 });
@@ -56,8 +54,7 @@ app.post('/cotacao', async (req, res) => {
         const yampiData = JSON.parse(requestBodyRaw.toString('utf8'));
         console.log('Payload Yampi Recebido:', JSON.stringify(yampiData, null, 2));
 
-        // --- Dados necessários da Yampi ---
-        const cepOrigem = "30720404"; // CEP de origem fixo, se for sempre o mesmo
+        const cepOrigem = "30720404"; 
         const cepDestino = yampiData.zipcode ? yampiData.zipcode.replace(/\D/g, '') : null;
         const valorDeclarado = yampiData.amount || 0;
         const cnpjCpfDestinatario = yampiData.cart && yampiData.cart.customer ? yampiData.cart.customer.document : null;
@@ -84,38 +81,33 @@ app.post('/cotacao', async (req, res) => {
 
         // --- Cotação Braspress ---
         try {
-            // Este payload é uma suposição e precisará ser ajustado conforme a documentação EXATA da Braspress.
-            // A API da Braspress geralmente usa uma estrutura XML complexa ou JSON com formatos específicos.
+            // <<<<<<< ATENÇÃO AQUI! ALTERAÇÕES DE AUTENTICAÇÃO
+            // Concatena usuário e senha no formato 'user:pass'
+            const authString = `${BRASPRESS_USER}:${BRASPRESS_PASSWORD}`;
+            // Codifica a string em Base64
+            const encodedAuth = Buffer.from(authString).toString('base64');
+            // Remove as credenciais do payload, pois elas vão no cabeçalho
             const payloadBraspress = {
                 "cnpjRemetente": BRASPRESS_CNPJ,
-                "usuario": BRASPRESS_USER,
-                "senha": BRASPRESS_PASSWORD,
                 "origem": cepOrigem,
                 "destino": cepDestino,
                 "peso": pesoTotal,
-                "valorNf": valorDeclarado, // Nome do campo pode variar (ex: valorDeclarado)
-                "tipoServico": "NORMAL", // Exemplo, pode ser um código Braspress (ex: '0' ou '1')
-                "tipoEntrega": "D", // Exemplo, "D" para delivery
-                "volumes": [ // A Braspress pode exigir um array detalhado de volumes
+                "valorNf": valorDeclarado,
+                "tipoServico": "NORMAL",
+                "tipoEntrega": "D",
+                "volumes": [
                     {
-                        "cubagem": cubagemTotal, // Cubagem total dos itens em m³
+                        "cubagem": cubagemTotal,
                         "peso": pesoTotal,
                         "quantidade": qtdeVolumeTotal,
-                        // Se a Braspress exigir dimensões por volume, você precisará iterar os SKUs
-                        // "altura": yampiData.skus[0].height,
-                        // "largura": yampiData.skus[0].width,
-                        // "comprimento": yampiData.skus[0].length,
                     }
                 ]
-                // Outros campos que a documentação da Braspress pode exigir:
-                // "isencaoInscricaoEstadual": false,
-                // "naturezaCarga": "OUTROS",
             };
+            // <<<<<<< FIM ALTERAÇÕES DE AUTENTICAÇÃO
 
             console.log('Payload Braspress Enviado:', JSON.stringify(payloadBraspress, null, 2));
 
-            // <<<<<<< ATENÇÃO AQUI! URL CORRIGIDA PARA O ENDPOINT DA BRASPRESS
-            const braspressApiUrl = `https://api.braspress.com/v1/cotacao/calcular/json`; // Retorno esperado JSON
+            const braspressApiUrl = `https://api.braspress.com/v1/cotacao/calcular/json`; 
 
             const responseBraspress = await axios.post(
                 braspressApiUrl,
@@ -123,16 +115,14 @@ app.post('/cotacao', async (req, res) => {
                 {
                     headers: {
                         'Content-Type': 'application/json',
-                        // Adicionar cabeçalhos de autenticação se a API da Braspress exigir (ex: 'Authorization')
+                        // <<<<<<< ATENÇÃO AQUI! NOVO CABEÇALHO DE AUTENTICAÇÃO
+                        'Authorization': `Basic ${encodedAuth}`
                     },
-                    httpsAgent: agent // Se necessário para ignorar certificados SSL inválidos
+                    httpsAgent: agent 
                 }
             );
 
-            // Processar a resposta da Braspress
             if (responseBraspress.data) {
-                // A estrutura EXATA da resposta da Braspress precisa ser confirmada pela documentação.
-                // Este é um exemplo hipotético baseado em respostas comuns.
                 if (responseBraspress.data.cotacao && responseBraspress.data.cotacao.valorTotalFrete) {
                     opcoesFrete.push({
                         "name": "Braspress",
