@@ -4,7 +4,7 @@ const axios = require('axios');
 const crypto = require('crypto');
 const https = require('https'); // Necessário para ignorar erros SSL se a API Braspress precisar
 
-const app = express();
+const app = express(); // Linha temporaria para forcar o Git a reconhecer a mudanca
 
 app.use(express.raw({ type: 'application/json' }));
 app.use(express.json());
